@@ -26,6 +26,12 @@ EVALUATION_DT_ASSUMED = 0.05
 # UAV to latch on the side nearest its neighbour and can leave less than the
 # required 3 m separation.  One metre keeps capture unambiguous and is also a
 # stricter terminal-accuracy criterion.
+# Tried 0.9 to buy extra terminal clearance; reverted (see git history /
+# PR discussion) -- it broke the previously-working 614-cycle baseline
+# (new "no coordinated candidate" failure at cycle 560, 2/24 arrived)
+# without fixing the actual observed failure, which happens mid-flight
+# (cycle ~112, mission_time ~22s) long before any UAV nears its terminal
+# capture radius. This constant is not the lever for that issue.
 GOAL_TOLERANCE_ASSUMED = 1.0
 RANDOM_SEED_ASSUMED = 0
 CURVATURE_SPEED_EPS = 1.0e-8
