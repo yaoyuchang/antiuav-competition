@@ -24,22 +24,25 @@ def _interpolate_at_x(waypoints, x_target):
     return None
 
 
-def band_waypoints(guide_planner, waypoints, band_altitude):
-    """Lift the cruise section of a planned guide to ``band_altitude``.
+def band_waypoints(guide_planner, waypoints, band_altitude, lateral_offset=0.):
+    """Lift the cruise section of a planned guide to ``band_altitude`` and push
+    it sideways by ``lateral_offset``.
 
-    The horizontal route is reused as planned -- it already avoids every static
-    obstacle, and raising a laterally clear path keeps it clear, since obstacles
-    are ground-anchored prisms.  Only the climb and descent legs are new
-    geometry, so every resulting segment is re-checked against the real
-    obstacles rather than against the A* occupancy grid: the planner's own
+    Raising the route is safe by construction -- obstacles are ground-anchored
+    prisms, so a laterally clear path stays clear as it climbs -- but shifting
+    it sideways is not, and neither are the climb and descent legs.  Every
+    resulting segment is therefore re-checked against the real obstacle
+    geometry rather than against the A* occupancy grid: the planner's own LOS
     pruning works off that same geometry and would otherwise straighten the
     climb away.
 
-    Past ``GUIDE_BAND_DESCENT_END_X`` the returned route is identical to the
-    planned one, so the terminal phase is left exactly as it was.
+    Both deviations share one ramp factor (0 at the start, 1 across the cruise,
+    0 again by ``GUIDE_BAND_DESCENT_END_X``) so they wind in and out together.
+    Past that x the returned route is identical to the planned one, leaving the
+    terminal phase exactly as it was.
 
-    Returns None when the route cannot be banded (non-monotonic in x, or a
-    lifted segment clips an obstacle); the caller then keeps the flat guide.
+    Returns None when the route cannot be shaped (non-monotonic in x, or a
+    moved segment clips an obstacle); the caller then falls back.
     """
     climb_end = config.GUIDE_BAND_CLIMB_END_X
     cruise_end = config.GUIDE_BAND_CRUISE_END_X
@@ -51,6 +54,15 @@ def band_waypoints(guide_planner, waypoints, band_altitude):
     if rejoin is None:
         return None
     rejoin_altitude = float(rejoin[1])
+
+    def ramp_at(x):
+        if x <= climb_end:
+            return (x - start_x) / (climb_end - start_x)
+        if x <= cruise_end:
+            return 1.
+        if x >= descent_end:
+            return 0.
+        return (descent_end - x) / (descent_end - cruise_end)
 
     def altitude_at(x, planned_altitude):
         if x <= climb_end:
@@ -71,7 +83,7 @@ def band_waypoints(guide_planner, waypoints, band_altitude):
         if point is None:
             return None
         banded.append([point[0], altitude_at(point[0], float(point[1])),
-                       point[2]])
+                       point[2] + ramp_at(point[0]) * lateral_offset])
     banded = np.asarray(banded, dtype='float64')
     keep = np.r_[True, np.linalg.norm(np.diff(banded, axis=0), axis=1) > 1e-10]
     banded = banded[keep]
@@ -82,6 +94,30 @@ def band_waypoints(guide_planner, waypoints, band_altitude):
                                                     banded[index + 1]):
             return None
     return banded
+
+
+def _shaped_route(guide_planner, waypoints, uav_index, goal_z):
+    """Return the banded/corridored route for one UAV, degrading on failure.
+
+    Corridor scales are tried widest first and the first one whose every
+    segment clears the real obstacles wins; then altitude-only; then the
+    planned route untouched.  Widening laterally is what needs the degradation
+    ladder -- obstacles 6 (z=-500), 9 (z=-433) and 13 (z=467) sit far off the
+    centreline, so the widest corridors are not always flyable.
+    """
+    bands = config.GUIDE_ALTITUDE_BANDS
+    if not bands:
+        return waypoints
+    band_altitude = bands[uav_index % len(bands)]
+    # goal_z is monotonic in UAV index, so scaling it keeps corridor order and
+    # goal order identical and the routes never cross as they converge.
+    for scale in config.GUIDE_CORRIDOR_SCALES:
+        shaped = band_waypoints(guide_planner, waypoints, band_altitude,
+                                goal_z * (scale - 1.))
+        if shaped is not None:
+            return shaped
+    shaped = band_waypoints(guide_planner, waypoints, band_altitude)
+    return waypoints if shaped is None else shaped
 
 
 def formal_case(mode='fixed', seed=0, starts_csv=None, initial_goals_csv=None,
@@ -113,7 +149,6 @@ def formal_case(mode='fixed', seed=0, starts_csv=None, initial_goals_csv=None,
     guide_planner = GlobalGuidePlanner(environment.obstacles, boundary,
                                        vertical_reserve=10.)
     planning_start = time.perf_counter()
-    bands = config.GUIDE_ALTITUDE_BANDS
     routes = []
     for uav, (start, goal) in enumerate(zip(environment.starts,
                                             environment.initial_goals)):
@@ -121,10 +156,8 @@ def formal_case(mode='fixed', seed=0, starts_csv=None, initial_goals_csv=None,
         if not guide.success:
             raise RuntimeError('global guide failed for UAV {}: {}'.format(
                 uav, guide.reason))
-        banded = (None if not bands else
-                  band_waypoints(guide_planner, guide.waypoints,
-                                 bands[uav % len(bands)]))
-        routes.append(guide.waypoints if banded is None else banded)
+        routes.append(_shaped_route(guide_planner, guide.waypoints, uav,
+                                    float(goal[2])))
     single_planning_duration_seconds = time.perf_counter() - planning_start
     planners = [RecedingHorizonPlanner(
         GlobalGuideTracker(waypoints, turn_aware_enabled=True,

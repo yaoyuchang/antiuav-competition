@@ -69,17 +69,30 @@ TURN_PREVIEW_MAX = 300.0
 # Spacing must exceed 2 * max(PRIMITIVE_VERTICAL_OFFSETS) = 20 m, otherwise L2
 # re-mixes the bands on its own.
 #
-# DISABLED BY DEFAULT (empty tuple).  Banding demonstrably fixes the problem it
-# targets -- the CSV scenario's cruise-phase "no coordinated candidate" moved
-# from cycle 112 (22.4 s, 0/24 arrived) out to cycle 562 (112.4 s, 1/24), a 5x
-# improvement that confirms the diagnosis -- but every variant tried also broke
-# the terminal phase, turning the 614-cycle 24/24 baseline into a failure:
-#   (30, 60, 90), descend to goal from x=4000   -> baseline 531, CSV 562
-#   (30, 60, 90), rejoin planned route by x=3400 -> baseline 365
-#   (30, 50, 70), descend to goal from x=4000   -> baseline 382
-# The trade is a cruise-phase failure for a terminal-phase one, so it is left
-# off.  Set this to a spaced tuple (>= 20 m apart) to re-enable and experiment.
-GUIDE_ALTITUDE_BANDS = ()
+# Bands alone are NOT sufficient -- they must be paired with the corridors
+# below.  Measured, competition mode, seed 0, as "hardcoded baseline / CSV":
+#   no banding                 614 ok 24/24  /  112 FAIL 0/24
+#   (30,60,90) bands only      531 FAIL      /  562 FAIL 1/24
+#   (30,50,70) bands only      382 FAIL      /  -
+#   (30,60,90) + corridors     583 ok 24/24  /  583 ok 24/24
+# Bands alone only move the failure from the cruise phase to the terminal
+# phase; adding corridors clears both, and the two configurations then land on
+# the same result, i.e. the millimetre-level CSV rounding that used to decide
+# success no longer changes the outcome.  Empty tuple disables banding.
+GUIDE_ALTITUDE_BANDS = (30.0, 60.0, 90.0)
+# Lateral corridors, layered on top of the altitude bands.  Each UAV's cruise
+# section is pushed sideways to goal_z * scale, so corridor order matches goal
+# order and the routes never have to cross when they converge at the end.
+# Unlike raising a route, shifting it sideways can move it into an obstacle, so
+# each UAV tries these scales in order and keeps the first whose every segment
+# clears the real obstacle geometry; an empty tuple disables corridors.
+# Most UAVs degrade all the way to no corridor: measured at mid-cruise, all 24
+# planned routes thread the same lateral gap at z between -8 and -13 m
+# regardless of their -40..+40 starts and -100..+130 goals, so there is simply
+# no lateral room down low.  Only the 90 m band, where just 4 obstacles still
+# reach, has space to spread.  That handful of relocated routes is nonetheless
+# what turns the bands-only terminal failure into a completed mission.
+GUIDE_CORRIDOR_SCALES = (2.5, 2.0, 1.5)
 # Altitude profile when banding is on: climb to the band by CLIMB_END, hold it
 # to CRUISE_END, rejoin the originally planned altitude by DESCENT_END, and
 # follow the planned route unchanged past that.  Unwinding the band earlier
