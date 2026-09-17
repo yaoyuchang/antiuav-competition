@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import numpy as np
 from mamp.envs import subject3_environment
+from mamp.simulation.mission_metrics import compute_energy_and_smoothness
 from config_loader import load_obstacles_from_csv, load_points_from_csv, get_config_path
 
 
@@ -80,6 +81,9 @@ def run_planner_with_config(config_dir, mode='fixed', cycles=2000,
         initial_goals_csv=str(initial_goals_csv) if initial_goals_csv.exists() else None,
         changed_goals_csv=str(changed_goals_csv) if changed_goals_csv.exists() else None
     )
+    # "单次规划时长"官方口径：一次产出全部24条完整路径的用时（L1全局引导），
+    # 与下面滚动时域的单周期耗时（timing_summary_ms）是两个不同的指标。
+    single_planning_duration_seconds = evaluator.single_planning_duration_seconds
 
     # 如果是competition模式，额外启用正弦和随机扰动
     if mode == 'competition':
@@ -107,6 +111,7 @@ def run_planner_with_config(config_dir, mode='fixed', cycles=2000,
     print("规划完成")
     print("=" * 60)
     print(f"成功: {result.success}")
+    print(f"单次规划时长(一次产出全部24条完整路径): {single_planning_duration_seconds:.3f} 秒")
     print(f"完成周期: {result.completed_cycles}/{cycles}")
     print(f"任务时间: {result.mission_time:.2f} 秒")
     print(f"到达数量: {result.arrival_count}/24")
@@ -117,10 +122,16 @@ def run_planner_with_config(config_dir, mode='fixed', cycles=2000,
     if not result.success:
         print(f"失败原因: {result.reason}")
 
+    # 4b. 计算能耗与平滑性（官方5项指标里另外2项，40%权重）
+    mission_metrics = compute_energy_and_smoothness(result.cycle_logs)
+    print(f"集群总能量消耗: {mission_metrics['total_energy']:.3f} (Σ∫|需用过载|dt)")
+    print(f"路径平滑性(均值): {mission_metrics['mean_path_smoothness']:.6f} (∫κ²ds)")
+
     # 5. 保存输出
     output_data = {
         'success': result.success,
         'reason': result.reason,
+        'single_planning_duration_seconds': single_planning_duration_seconds,
         'completed_cycles': result.completed_cycles,
         'mission_time': result.mission_time,
         'arrival_count': result.arrival_count,
@@ -139,6 +150,12 @@ def run_planner_with_config(config_dir, mode='fixed', cycles=2000,
         'future_feasibility_rejection_count': result.future_feasibility_rejection_count,
         'fallback_count': result.fallback_count,
         'timing_summary_ms': result.timing_summary_ms,
+        # 能耗与平滑性（Σ∫|需用过载|dt，∫κ²ds；平滑性取24机均值，总和供参考）
+        'total_energy': mission_metrics['total_energy'],
+        'per_uav_energy': mission_metrics['per_uav_energy'],
+        'mean_path_smoothness': mission_metrics['mean_path_smoothness'],
+        'total_path_smoothness': mission_metrics['total_path_smoothness'],
+        'per_uav_smoothness': mission_metrics['per_uav_smoothness'],
         # 元数据
         'metadata': {
             'mode': mode,

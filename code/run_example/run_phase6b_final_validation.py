@@ -13,14 +13,38 @@ from mamp.simulation.final_validation_evaluator import (
     FinalValidationEvaluator, report_dict, timing_summary)
 
 
-def formal_case(mode='fixed', seed=0):
-    environment = Subject3Environment()
+def formal_case(mode='fixed', seed=0, starts_csv=None, initial_goals_csv=None,
+                changed_goals_csv=None):
+    """Create the formal validation case, optionally from CSV configuration.
+
+    Args:
+        mode: Running mode ('fixed', 'switch', 'sin', 'random')
+        seed: Random seed
+        starts_csv: Path to start_points.csv (optional; default hardcoded case)
+        initial_goals_csv: Path to goal_points_initial.csv (optional)
+        changed_goals_csv: Path to goal_points_changed.csv (optional)
+
+    Returns:
+        (evaluator, starts, initial_goals).  ``evaluator`` additionally
+        carries a ``single_planning_duration_seconds`` attribute: the
+        wall-clock time to produce all 24 complete global guide paths in one
+        shot, which is the official "single planning duration" metric
+        definition confirmed with the organizers, distinct from the
+        per-cycle rolling-horizon latency reported elsewhere.
+    """
+    environment = Subject3Environment(
+        starts_csv=starts_csv,
+        initial_goals_csv=initial_goals_csv,
+        changed_goals_csv=changed_goals_csv
+    )
     boundary = np.vstack((environment.starts, environment.initial_goals,
                           environment.changed_goals))
     guide_planner = GlobalGuidePlanner(environment.obstacles, boundary,
                                        vertical_reserve=10.)
+    planning_start = time.perf_counter()
     guides = [guide_planner.plan(start, goal) for start, goal in
               zip(environment.starts, environment.initial_goals)]
+    single_planning_duration_seconds = time.perf_counter() - planning_start
     planners = [RecedingHorizonPlanner(
         GlobalGuideTracker(guide.waypoints, turn_aware_enabled=True,
                            turn_accel_ref_ratio=.3), environment.obstacles,
@@ -43,6 +67,7 @@ def formal_case(mode='fixed', seed=0):
     evaluator = FinalValidationEvaluator(
         planners, environment.obstacles, managers,
         guide_planner if mode == 'switch' else None)
+    evaluator.single_planning_duration_seconds = single_planning_duration_seconds
     return evaluator, environment.starts, environment.initial_goals
 
 
