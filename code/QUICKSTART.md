@@ -44,11 +44,16 @@ python evaluate_metrics.py \
   --output output/metrics.json
 ```
 
-### 方式2：原有方式（保持兼容）
+### 方式2：可视化动画（同一份CSV配置，用于肉眼核对）
 
 ```bash
 cd code/run_example
+# 不传 --config-dir 时用硬编码默认场景，行为与之前一致
 python animate_phase6b_final_validation.py --mode competition --cycles 2000
+
+# 传 --config-dir 后动画使用和评分脚本相同的CSV场景
+python animate_phase6b_final_validation.py --config-dir ../config --mode competition \
+  --no-show --output output/demo.gif
 ```
 
 ## 📊 配置文件说明
@@ -65,9 +70,11 @@ python animate_phase6b_final_validation.py --mode competition --cycles 2000
 ## 🎯 核心改动
 
 1. ✅ `subject3_environment.py` - 支持从CSV加载起点/终点
-2. ✅ `run_phase6b_final_validation.py` - formal_case()支持CSV路径参数
-3. ✅ `run_with_config.py` - 新的标准化入口
-4. ✅ `evaluate_metrics.py` - 独立的指标计算脚本
-5. ✅ 保持向后兼容 - 原有代码仍然可用
+2. ✅ `run_phase6b_final_validation.py` - formal_case()支持CSV路径参数（此前接口断裂已修复）
+3. ✅ `run_with_config.py` - 标准化入口，输出含官方5项指标所需的全部原始数据
+4. ✅ `animate_phase6b_final_validation.py` - 同步支持 `--config-dir`，可视化同一份CSV场景
+5. ✅ `mission_metrics.py` - 新增能耗（Σ∫|需用过载|dt）与平滑性（∫κ²ds）计算
+6. ✅ `evaluate_metrics.py` - 独立的指标计算脚本，按官方 30/30/20/10/10 权重给出加权总分
+7. ✅ 保持向后兼容 - 不传 `--config-dir` 时行为与之前一致
 
 详细说明请查看 [接口使用说明.md](接口使用说明.md)

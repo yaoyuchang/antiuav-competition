@@ -185,6 +185,14 @@ class FinalValidationEvaluator(object):
                 'cycle': cycle, 'mission_time': mission_time,
                 'positions': positions.copy(), 'velocities': velocities.copy(),
                 'accelerations': accelerations.copy(),
+                # Fine-grained (EXECUTION_RECORD_DT) samples for the whole
+                # executed segment, kept for energy/smoothness integration
+                # (mission_metrics.py) in addition to the cycle-boundary
+                # snapshot above used by the rolling controller itself.
+                'segment_positions': segment_p.copy(),
+                'segment_velocities': segment_v.copy(),
+                'segment_accelerations': segment_a.copy(),
+                'segment_times': (mission_time + self.execution_times).copy(),
                 'priority_order': coordination.priority_order.copy(),
                 'conflict_cluster': (np.empty(0, dtype='int64') if resolution is None
                     else resolution.cluster_uav_ids.copy()),

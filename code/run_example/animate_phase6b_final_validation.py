@@ -2,6 +2,7 @@
 
 import argparse
 import os
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -13,9 +14,23 @@ from run_phase6b_final_validation import formal_case
 from mamp.configs import subject3_config as config
 
 
-def _scenario(mode, seed):
+def _scenario(mode, seed, config_dir=None):
+    csv_paths = {'starts_csv': None, 'initial_goals_csv': None,
+                 'changed_goals_csv': None}
+    if config_dir is not None:
+        config_path = Path(config_dir)
+        from mamp.envs import subject3_environment
+        obstacles_csv = config_path / 'obstacles.csv'
+        if obstacles_csv.exists():
+            subject3_environment.load_obstacles_from_config(str(obstacles_csv))
+        for key, filename in (('starts_csv', 'start_points.csv'),
+                              ('initial_goals_csv', 'goal_points_initial.csv'),
+                              ('changed_goals_csv', 'goal_points_changed.csv')):
+            candidate = config_path / filename
+            if candidate.exists():
+                csv_paths[key] = str(candidate)
     evaluator, starts, goals = formal_case(
-        'switch' if mode == 'competition' else mode, seed)
+        'switch' if mode == 'competition' else mode, seed, **csv_paths)
     if mode == 'competition':
         # Combine the separately validated switch and noisy-target behaviours
         # for the closest visual reproduction of the written task.
@@ -29,8 +44,8 @@ def _scenario(mode, seed):
     return evaluator, starts, goals, evaluator.obstacles
 
 
-def run_scenario(mode, seed, cycles):
-    evaluator, starts, goals, obstacles = _scenario(mode, seed)
+def run_scenario(mode, seed, cycles, config_dir=None):
+    evaluator, starts, goals, obstacles = _scenario(mode, seed, config_dir)
     print('planning {} cycles for mode={} ...'.format(cycles, mode), flush=True)
     result = evaluator.run('animation-{}'.format(mode), starts, goals, cycles,
                            stop_on_all_arrived=True)
@@ -189,6 +204,10 @@ def main():
                         choices=('competition', 'fixed', 'switch', 'sin', 'random'),
                         default='competition',
                         help='goal behaviour (default: competition = switch + noise)')
+    parser.add_argument('--config-dir', default=None,
+                        help='directory with obstacles.csv/start_points.csv/'
+                             'goal_points_initial.csv/goal_points_changed.csv '
+                             '(default: use the hardcoded demonstration scenario)')
     parser.add_argument('--cycles', type=int, default=2000,
                         help='maximum cycles; stops when all UAVs arrive (default: 2000)')
     parser.add_argument('--seed', type=int, default=0)
@@ -208,7 +227,7 @@ def main():
     args = parser.parse_args()
     if args.cycles <= 0 or args.speed <= 0 or args.interval <= 0:
         parser.error('--cycles, --speed and --interval must be positive')
-    data = run_scenario(args.mode, args.seed, args.cycles)
+    data = run_scenario(args.mode, args.seed, args.cycles, args.config_dir)
     common = {'interval_ms': args.interval, 'playback_speed': args.speed,
               'vertical_exaggeration': args.vertical_exaggeration}
     if args.local_output or args.overview_output:
