@@ -1,0 +1,35 @@
+{
+  "success": false,
+  "reason": "no coordinated candidate",
+  "completed_cycles": 112,
+  "mission_time": 22.399999999999952,
+  "arrival_count": 0,
+  "minimum_uav_distance": 3.0675852518671607,
+  "minimum_static_clearance": 3.438679839385536,
+  "minimum_dynamic_clearance": 646.0360895059983,
+  "uav_violation_count": 0,
+  "static_violation_count": 0,
+  "dynamic_violation_count": 0,
+  "goal_update_count": 2712,
+  "global_guide_replan_count": 0,
+  "dynamic_rejection_count": 0,
+  "k3_solved_count": 2,
+  "k5_activation_count": 1,
+  "joint_search_count": 4,
+  "future_feasibility_rejection_count": 0,
+  "fallback_count": 1,
+  "timing_summary_ms": {
+    "mean": 125.96700558035721,
+    "p50": 121.59385400000033,
+    "p95": 153.64792514999985,
+    "p99": 185.16958649999893,
+    "max": 191.82262500000036
+  },
+  "metadata": {
+    "mode": "competition",
+    "seed": 0,
+    "max_cycles": 2000,
+    "num_uavs": 24,
+    "config_dir": "../config"
+  }
+}

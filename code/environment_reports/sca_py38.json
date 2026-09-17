@@ -1,0 +1,16 @@
+{
+  "checked_at_utc": "2026-09-15T16:43:04.976497+00:00",
+  "python_executable": "/Applications/anaconda3/envs/sca_py38/bin/python",
+  "python_version": "3.8.20",
+  "environment_name": "sca_py38",
+  "expected_environment": "sca_py38",
+  "environment_matches": true,
+  "platform": "macOS-15.7.7-arm64-arm-64bit",
+  "packages": {
+    "numpy": "1.24.4",
+    "matplotlib": "3.7.5",
+    "Pillow": "10.4.0"
+  },
+  "missing_packages": [],
+  "scope": "Environment inventory only; no simulation or algorithm validation."
+}
