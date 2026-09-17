@@ -5,12 +5,83 @@ import time
 import numpy as np
 
 from mamp.agents.obstacle import Obstacle
+from mamp.configs import subject3_config as config
 from mamp.envs.subject3_environment import Subject3Environment
 from mamp.planners.global_guide import GlobalGuidePlanner, GlobalGuideTracker
 from mamp.planners.goal_manager import DynamicGoalModel, GoalManager
 from mamp.planners.receding_horizon_planner import RecedingHorizonPlanner
 from mamp.simulation.final_validation_evaluator import (
     FinalValidationEvaluator, report_dict, timing_summary)
+
+
+def _interpolate_at_x(waypoints, x_target):
+    """Return the point on the polyline at ``x_target``, or None if unreachable."""
+    for index in range(len(waypoints) - 1):
+        lower, upper = waypoints[index], waypoints[index + 1]
+        if upper[0] > lower[0] and lower[0] <= x_target <= upper[0]:
+            ratio = (x_target - lower[0]) / (upper[0] - lower[0])
+            return lower + ratio * (upper - lower)
+    return None
+
+
+def band_waypoints(guide_planner, waypoints, band_altitude):
+    """Lift the cruise section of a planned guide to ``band_altitude``.
+
+    The horizontal route is reused as planned -- it already avoids every static
+    obstacle, and raising a laterally clear path keeps it clear, since obstacles
+    are ground-anchored prisms.  Only the climb and descent legs are new
+    geometry, so every resulting segment is re-checked against the real
+    obstacles rather than against the A* occupancy grid: the planner's own
+    pruning works off that same geometry and would otherwise straighten the
+    climb away.
+
+    Past ``GUIDE_BAND_DESCENT_END_X`` the returned route is identical to the
+    planned one, so the terminal phase is left exactly as it was.
+
+    Returns None when the route cannot be banded (non-monotonic in x, or a
+    lifted segment clips an obstacle); the caller then keeps the flat guide.
+    """
+    climb_end = config.GUIDE_BAND_CLIMB_END_X
+    cruise_end = config.GUIDE_BAND_CRUISE_END_X
+    descent_end = config.GUIDE_BAND_DESCENT_END_X
+    start_x, start_altitude = float(waypoints[0][0]), float(waypoints[0][1])
+    if not start_x < climb_end < cruise_end < descent_end < float(waypoints[-1][0]):
+        return None
+    rejoin = _interpolate_at_x(waypoints, descent_end)
+    if rejoin is None:
+        return None
+    rejoin_altitude = float(rejoin[1])
+
+    def altitude_at(x, planned_altitude):
+        if x <= climb_end:
+            ratio = (x - start_x) / (climb_end - start_x)
+            return start_altitude + ratio * (band_altitude - start_altitude)
+        if x <= cruise_end:
+            return band_altitude
+        if x >= descent_end:
+            return planned_altitude
+        ratio = (x - cruise_end) / (descent_end - cruise_end)
+        return band_altitude + ratio * (rejoin_altitude - band_altitude)
+
+    x_values = sorted(set([float(point[0]) for point in waypoints] +
+                          [climb_end, cruise_end, descent_end]))
+    banded = []
+    for x in x_values:
+        point = _interpolate_at_x(waypoints, x)
+        if point is None:
+            return None
+        banded.append([point[0], altitude_at(point[0], float(point[1])),
+                       point[2]])
+    banded = np.asarray(banded, dtype='float64')
+    keep = np.r_[True, np.linalg.norm(np.diff(banded, axis=0), axis=1) > 1e-10]
+    banded = banded[keep]
+    if len(banded) < 2:
+        return None
+    for index in range(len(banded) - 1):
+        if not guide_planner.segment_is_static_safe(banded[index],
+                                                    banded[index + 1]):
+            return None
+    return banded
 
 
 def formal_case(mode='fixed', seed=0, starts_csv=None, initial_goals_csv=None,
@@ -42,17 +113,27 @@ def formal_case(mode='fixed', seed=0, starts_csv=None, initial_goals_csv=None,
     guide_planner = GlobalGuidePlanner(environment.obstacles, boundary,
                                        vertical_reserve=10.)
     planning_start = time.perf_counter()
-    guides = [guide_planner.plan(start, goal) for start, goal in
-              zip(environment.starts, environment.initial_goals)]
+    bands = config.GUIDE_ALTITUDE_BANDS
+    routes = []
+    for uav, (start, goal) in enumerate(zip(environment.starts,
+                                            environment.initial_goals)):
+        guide = guide_planner.plan(start, goal)
+        if not guide.success:
+            raise RuntimeError('global guide failed for UAV {}: {}'.format(
+                uav, guide.reason))
+        banded = (None if not bands else
+                  band_waypoints(guide_planner, guide.waypoints,
+                                 bands[uav % len(bands)]))
+        routes.append(guide.waypoints if banded is None else banded)
     single_planning_duration_seconds = time.perf_counter() - planning_start
     planners = [RecedingHorizonPlanner(
-        GlobalGuideTracker(guide.waypoints, turn_aware_enabled=True,
+        GlobalGuideTracker(waypoints, turn_aware_enabled=True,
                            turn_accel_ref_ratio=.3), environment.obstacles,
         # Dense terminal points are only 5 m apart.  A zero capture speed lets
         # each UAV settle into its 3 m arrival ball without flying through an
         # adjacent UAV that is already holding position.
         goal=goal, terminal_capture_speed=0.)
-        for guide, goal in zip(guides, environment.initial_goals)]
+        for waypoints, goal in zip(routes, environment.initial_goals)]
     if mode == 'fixed':
         managers = None
     else:
