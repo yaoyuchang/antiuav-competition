@@ -79,20 +79,100 @@ TURN_PREVIEW_MAX = 300.0
 # phase; adding corridors clears both, and the two configurations then land on
 # the same result, i.e. the millimetre-level CSV rounding that used to decide
 # success no longer changes the outcome.  Empty tuple disables banding.
-GUIDE_ALTITUDE_BANDS = (30.0, 60.0, 90.0)
-# Lateral corridors, layered on top of the altitude bands.  Each UAV's cruise
-# section is pushed sideways to goal_z * scale, so corridor order matches goal
-# order and the routes never have to cross when they converge at the end.
-# Unlike raising a route, shifting it sideways can move it into an obstacle, so
-# each UAV tries these scales in order and keeps the first whose every segment
-# clears the real obstacle geometry; an empty tuple disables corridors.
+#
+# 4 bands instead of 3: measured real-flight pairwise clearances (not just the
+# static-geometry corridor probe below) show the one genuine mid-flight
+# congestion spike -- aside from the launch grid and the terminal parking
+# formation, both dense by design -- sits at x in [3200, 3600), i.e. right at
+# GOAL_SWITCH_SLANT_RANGE=3500 and inside the geometric "waist" the corridor
+# comment below describes.  That is 8 same-altitude UAVs converging on the
+# switch at once under 3 bands; splitting to 4 halves that to 6.  15/40/65/90
+# was chosen over an even split (22.5 apart) to stay clear of both the y=0
+# floor and the 90 m ceiling with margin, while keeping every gap above the
+# required 25 m; the waist's lateral corridor (see below) was independently
+# probed at y=15/40/65/90 and is identical to the old y=30/60/90 probe, so
+# nothing here depends on which of the two obstacles-are-taller-than-either
+# case actually holds. 6 equal bands (90 m / 5 gaps = 18 m) would violate the
+# spacing rule above and was rejected on that basis alone.
+GUIDE_ALTITUDE_BANDS = (15.0, 40.0, 65.0, 90.0)
+# Lateral corridors, layered on top of the altitude bands. SUPERSEDED by
+# lane_assignment.py (see GUIDE_LANE_* below) but kept, unremoved, as the
+# fallback path shaped_initial_route() takes when GUIDE_LANE_ASSIGNMENT_ENABLED
+# is False -- that reproduces the exact prior known-good baseline (583 cycles,
+# score 76.4) rather than a re-derived approximation of it.
+#
+# Original scheme, still active in the fallback: each UAV's cruise section is
+# pushed sideways to goal_z * scale, so corridor order matches goal order and
+# the routes never have to cross when they converge at the end. Unlike raising
+# a route, shifting it sideways can move it into an obstacle, so each UAV
+# tries these scales in order and keeps the first whose every segment clears
+# the real obstacle geometry; an empty tuple disables corridors.
 # Most UAVs degrade all the way to no corridor: measured at mid-cruise, all 24
 # planned routes thread the same lateral gap at z between -8 and -13 m
 # regardless of their -40..+40 starts and -100..+130 goals, so there is simply
 # no lateral room down low.  Only the 90 m band, where just 4 obstacles still
 # reach, has space to spread.  That handful of relocated routes is nonetheless
 # what turns the bands-only terminal failure into a completed mission.
+#
+# Why this was superseded: the real congestion isn't a place, it's the goal
+# switch itself -- 24 UAVs abandoning tightly-packed first-leg goals for
+# changed goals up to 1100 m apart, all at once. goal_z*scale only spreads
+# UAVs relative to their FIRST-LEG goal (+-130 m), which is irrelevant to
+# where they're headed after the switch, so it can't touch that. Measured,
+# switch-region window x in [3200,3600), same-layer near-misses: <6m 285,
+# <4m 61 with this scheme -- unimproved, because the fan-out itself is
+# untouched. GUIDE_LANE_* replaces this with an offset computed from each
+# UAV's actual post-switch destination.
 GUIDE_CORRIDOR_SCALES = (2.5, 2.0, 1.5)
+
+# Lane assignment: supersedes GUIDE_CORRIDOR_SCALES above. Each UAV's
+# first-leg cruise offset is computed by lane_assignment.assign_lane_offsets()
+# from where it is actually headed AFTER the goal switch (not its first-leg
+# goal), so the fan-out at the switch point happens gradually across the
+# whole first leg instead of all at once. See lane_assignment.py for the
+# measurement trail: two purely-geometric hotspot predictors were tried and
+# rejected first (first-leg route density is nearly uniform end to end --
+# the congestion is an EVENT, not a PLACE, so nothing in first-leg geometry
+# alone predicts it), before landing on this "just fly toward the real
+# destination early" approach.
+GUIDE_LANE_ASSIGNMENT_ENABLED = True
+# Discount ladder for the lane offset computed above -- mirrors the old
+# GUIDE_CORRIDOR_SCALES ladder's purpose: a lane centre checked reachable on
+# a coarse probe grid can still clip an obstacle on the real, densely-sampled
+# route, so each UAV tries the full offset, then discounted fractions of it
+# (pulling back toward its own natural, unshaped cruise line), before
+# altitude-only and the plain route (both handled by shaped_initial_route()
+# itself, not this ladder).
+GUIDE_LANE_DISCOUNT_LADDER = (1.0, 0.7, 0.4)
+# group_by_effective_goal() splits UAVs into destination groups wherever a
+# gap between (sorted) effective goals exceeds max(MEDIAN_GAP * GAP_FACTOR,
+# MIN_GAP). This competition's changed-goal data has 3 tight clusters (~5-10 m
+# within-group spacing) separated by 440-570 m gaps, so almost any reasonable
+# factor/floor separates them correctly; MIN_GAP=50 m is the binding
+# constraint here (median gap is only 5 m) and exists so a scenario with no
+# real clustering (e.g. plain fixed-mode goals spaced ~10 m apart, uniformly)
+# doesn't get spuriously split on floating-point noise.
+GUIDE_LANE_GROUP_GAP_FACTOR = 3.0
+GUIDE_LANE_GROUP_MIN_GAP = 50.0
+# x-step for probing whether a candidate lane is reachable along the cruise
+# stretch before committing to it (assign_lane_offsets() checks every
+# multiple of this from the climb breakpoint up to min(descent breakpoint,
+# GOAL_SWITCH_SLANT_RANGE) -- geometry past the switch point doesn't matter,
+# a UAV that switches replans there anyway). 300 m matches the resolution
+# used throughout this feature's own measurement trail; halving it did not
+# change which candidates passed or failed on this obstacle field.
+GUIDE_LANE_PROBE_X_STEP = 300.0
+# If a group's own destination is not reachable along the probe grid (an
+# obstacle sits in the way at some altitude the group uses), its candidate
+# is scaled toward the centreline (z=0) by this factor and retried, up to
+# this many times, before giving up and leaving that group at offset 0 (not
+# a hard failure -- shaped_initial_route()'s band-only/plain-route fallbacks
+# still apply). Inactive on the current obstacle field: every group's own
+# destination (+-560 m and the near-centreline group) was measured reachable
+# at every candidate altitude on the first try, so this exists purely for
+# generalization to configurations where that isn't true.
+GUIDE_LANE_SHRINK_FACTOR = 0.85
+GUIDE_LANE_SHRINK_MAX_TRIES = 8
 # Altitude/corridor profile, expressed as fractions of the CURRENT leg's own
 # (start_x, goal_x) span rather than absolute metres, so the same
 # band_waypoints() serves both the first leg (0->5000 m) and the much shorter,

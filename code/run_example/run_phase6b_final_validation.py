@@ -9,6 +9,7 @@ from mamp.configs import subject3_config as config
 from mamp.envs.subject3_environment import Subject3Environment
 from mamp.planners.global_guide import GlobalGuidePlanner, GlobalGuideTracker
 from mamp.planners.goal_manager import DynamicGoalModel, GoalManager
+from mamp.planners.lane_assignment import assign_lane_offsets
 from mamp.planners.receding_horizon_planner import RecedingHorizonPlanner
 from mamp.planners.route_shaping import shaped_initial_route
 from mamp.simulation.final_validation_evaluator import (
@@ -44,15 +45,37 @@ def formal_case(mode='fixed', seed=0, starts_csv=None, initial_goals_csv=None,
     guide_planner = GlobalGuidePlanner(environment.obstacles, boundary,
                                        vertical_reserve=10.)
     planning_start = time.perf_counter()
-    routes = []
+    guides = []
     for uav, (start, goal) in enumerate(zip(environment.starts,
                                             environment.initial_goals)):
         guide = guide_planner.plan(start, goal)
         if not guide.success:
             raise RuntimeError('global guide failed for UAV {}: {}'.format(
                 uav, guide.reason))
-        routes.append(shaped_initial_route(guide_planner, guide.waypoints, uav,
-                                           float(goal[2])))
+        guides.append(guide)
+    # Lane offsets are computed from where each UAV is actually headed AFTER
+    # the goal switch (see lane_assignment.py), so they need every UAV's
+    # planned first-leg route up front rather than being derivable per-UAV
+    # inside the loop above. 'switch' is the only mode in which a changed
+    # goal is ever adopted (GoalManager below is built with
+    # switch_enabled=mode=='switch'), so that's also the only mode in which
+    # grouping by the changed goal is meaningful; every other mode groups by
+    # the first-leg goal itself, which is a same-value no-op fallback,
+    # not a special case.
+    bands = config.GUIDE_ALTITUDE_BANDS
+    if bands and config.GUIDE_LANE_ASSIGNMENT_ENABLED:
+        effective_goal_z = (environment.changed_goals[:, 2] if mode == 'switch'
+                            else environment.initial_goals[:, 2])
+        band_of_uav = [bands[uav % len(bands)] for uav in range(len(guides))]
+        lane_offsets = assign_lane_offsets(
+            guide_planner, [guide.waypoints for guide in guides],
+            band_of_uav, effective_goal_z)
+    else:
+        lane_offsets = [None] * len(guides)
+    routes = [shaped_initial_route(guide_planner, guide.waypoints, uav,
+                                   float(goal[2]), lane_offsets[uav])
+             for uav, (guide, goal) in enumerate(
+                 zip(guides, environment.initial_goals))]
     single_planning_duration_seconds = time.perf_counter() - planning_start
     planners = [RecedingHorizonPlanner(
         GlobalGuideTracker(waypoints, turn_aware_enabled=True,
