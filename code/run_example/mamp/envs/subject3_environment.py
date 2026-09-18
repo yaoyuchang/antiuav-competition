@@ -106,17 +106,23 @@ SUBJECT3_OBSTACLE_TABLE = (
 
 
 # ASSUMPTION: the official statement specifies that obstacles 10--12 move but
-# does not give their time functions.  These deterministic sinusoidal rules
-# were created for the local demonstration environment; they are not official.
-# Directions are expressed in world NUE coordinates.
+# does not give their time functions, nor the rotated boxes' orientation.
+# These deterministic sinusoidal rules were created for the local demonstration
+# environment; they are not official.  Directions are expressed in world NUE
+# coordinates, angles in degrees from the x axis.  Defaults only -- override
+# through config/dynamic_motions.csv via load_obstacles_from_config(), so that
+# every input reaches the planner through the CSV interface.
+# "Motion 3" (obstacle 11) follows the rectangle's 30-degree long axis; the
+# 300 m amplitude matches the two light-coloured limit positions in the figure.
+DEFAULT_ROTATED_ANGLE_DEGREES = 30.0
 DYNAMIC_MOTIONS = {
-    10: {'direction': [1.0, 0.0, 0.0], 'amplitude': 150.0, 'period': 80.0},
-    # "Motion 3" follows the rectangle's 30-degree long axis.  The 300 m
-    # amplitude matches the two light-coloured limit positions in the figure.
+    10: {'direction': [1.0, 0.0, 0.0], 'amplitude': 150.0, 'period': 80.0,
+         'angle_degrees': 30.0},
     11: {'direction': [math.cos(math.radians(30.0)), 0.0,
                        math.sin(math.radians(30.0))],
-         'amplitude': 300.0, 'period': 120.0},
-    12: {'direction': [0.0, 0.0, 1.0], 'amplitude': 120.0, 'period': 70.0},
+         'amplitude': 300.0, 'period': 120.0, 'angle_degrees': 30.0},
+    12: {'direction': [0.0, 0.0, 1.0], 'amplitude': 120.0, 'period': 70.0,
+         'angle_degrees': 30.0},
 }
 
 
@@ -128,11 +134,16 @@ def _shape(number, obstacle_type, size1, size2, height):
         common.update({'shape': 'cube', 'length': size1, 'width': size2,
                        'height': height})
     elif obstacle_type == 4:
-        # ASSUMPTION: 30 degrees is inferred from the supplied diagram; the
-        # obstacle table itself does not provide a numerical orientation.
+        parameters = DYNAMIC_MOTIONS.get(number)
+        if parameters is None:
+            raise ValueError(
+                'obstacle {} is type 4 (moving rotated box) but has no entry in '
+                'dynamic_motions.csv; add one or change its type'.format(number))
+        angle = parameters.get('angle_degrees', DEFAULT_ROTATED_ANGLE_DEGREES)
         common.update({'shape': 'rotated_cube', 'length': size1, 'width': size2,
-                       'height': height, 'angle': math.radians(30.0),
-                       'motion': DYNAMIC_MOTIONS[number]})
+                       'height': height, 'angle': math.radians(angle),
+                       'motion': {key: parameters[key] for key in
+                                  ('direction', 'amplitude', 'period')}})
     else:
         raise ValueError('unsupported primitive obstacle type: {}'.format(obstacle_type))
     return common
@@ -232,11 +243,18 @@ class Subject3Environment(object):
         return result
 
 
-def load_obstacles_from_config(csv_path=None):
+def load_obstacles_from_config(csv_path=None, motions_csv_path=None):
     """从CSV配置文件加载障碍物表格，覆盖全局变量SUBJECT3_OBSTACLE_TABLE
 
+    动态障碍物的运动参数（方向/振幅/周期）和旋转长方体的朝向角度另存于
+    dynamic_motions.csv：题面表1的列结构是固定的，塞不进这些工程假设值，
+    所以单独一张表，默认在障碍物表同目录下寻找。缺失时保留代码内默认值，
+    这样评委只替换题面那张表也能正常跑。
+
     Args:
-        csv_path: CSV文件路径，如果为None则使用默认路径
+        csv_path: 障碍物CSV路径，None时使用默认路径
+        motions_csv_path: 动态障碍物参数CSV路径，None时取障碍物表同目录下的
+            dynamic_motions.csv
     """
     global SUBJECT3_OBSTACLE_TABLE, DYNAMIC_MOTIONS
 
@@ -255,8 +273,15 @@ def load_obstacles_from_config(csv_path=None):
     from config_loader import load_obstacles_from_csv, load_dynamic_motions_from_csv
 
     SUBJECT3_OBSTACLE_TABLE = load_obstacles_from_csv(csv_path)
-    DYNAMIC_MOTIONS = load_dynamic_motions_from_csv(csv_path)
     print(f"已从 {csv_path} 加载 {len(SUBJECT3_OBSTACLE_TABLE)} 个障碍物配置")
+
+    if motions_csv_path is None:
+        motions_csv_path = Path(csv_path).parent / 'dynamic_motions.csv'
+    if Path(motions_csv_path).exists():
+        DYNAMIC_MOTIONS = load_dynamic_motions_from_csv(motions_csv_path)
+        print(f"已从 {motions_csv_path} 加载 {len(DYNAMIC_MOTIONS)} 条动态障碍物运动参数")
+    else:
+        print(f"提示: 未找到 {motions_csv_path}，动态障碍物运动参数使用代码内默认值")
 
 
 def should_switch_goals(*args, **kwargs):

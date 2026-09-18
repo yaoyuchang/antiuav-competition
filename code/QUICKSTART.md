@@ -10,6 +10,7 @@
 code/
 ├── config/                          # 配置文件（输入接口）
 │   ├── obstacles.csv               # 障碍物表格（题目表1）
+│   ├── dynamic_motions.csv         # 动态障碍物运动参数与朝向（题面未给，工程假设）
 │   ├── start_points.csv            # 起点表格
 │   ├── goal_points_initial.csv     # 初始终点表格（题目表2）
 │   └── goal_points_changed.csv     # 切换后终点表格（题目表3）
@@ -61,9 +62,11 @@ python animate_phase6b_final_validation.py --config-dir ../config --mode competi
 所有配置文件都在 `code/config/` 目录：
 
 1. **obstacles.csv** - 障碍物配置（题目表1）
-2. **start_points.csv** - 起点坐标
-3. **goal_points_initial.csv** - 初始终点（题目表2）
-4. **goal_points_changed.csv** - 切换后终点（题目表3）
+2. **dynamic_motions.csv** - 动态障碍物的运动方向/振幅/周期与旋转朝向（题面未给出，
+   属工程假设；该表可缺省，缺省时用代码内默认值）
+3. **start_points.csv** - 起点坐标
+4. **goal_points_initial.csv** - 初始终点（题目表2）
+5. **goal_points_changed.csv** - 切换后终点（题目表3）
 
 评委可以替换这些CSV文件来测试不同场景！
 

@@ -35,27 +35,43 @@ def load_obstacles_from_csv(csv_path):
 
 
 def load_dynamic_motions_from_csv(csv_path):
-    """从CSV表格推断动态障碍物运动参数
+    """从CSV表格加载动态障碍物（类型4）的运动与朝向参数
 
-    注意：运动参数（振幅、周期、方向）在CSV中未明确给出，
-    使用与原代码相同的硬编码值
+    题面只说明10/11/12号障碍物会运动，没有给出具体的运动方向、振幅、周期，
+    也没有给出旋转长方体的朝向角度，这些都是工程假设值。此前它们硬编码在
+    subject3_environment.py 里，现在改为从本表读取，使得全部输入都走接口。
+
+    表头：编号,运动方向角度,振幅,周期,朝向角度
+    两个角度都是与 x 轴的夹角（度），运动方向在水平面内，
+    换算成世界NUE坐标的单位向量 [cos, 0, sin]——直接存角度而不是存分量，
+    一是可读可改（题面图里给的本来就是"沿30度长轴"这种描述），
+    二是代码里现算 cos/sin 与原先硬编码的写法得到完全相同的浮点数，
+    不会因为手抄小数位引入精度扰动。
 
     Args:
         csv_path: CSV文件路径
 
     Returns:
-        dict: 动态障碍物ID到运动参数的映射
+        dict: 障碍物编号 -> {'direction', 'amplitude', 'period', 'angle_degrees'}
     """
-    # 这些参数在题目表格中未给出，保持原有设定
-    dynamic_motions = {
-        10: {'direction': [1.0, 0.0, 0.0], 'amplitude': 150.0, 'period': 80.0},
-        11: {'direction': [math.cos(math.radians(30.0)), 0.0,
-                           math.sin(math.radians(30.0))],
-             'amplitude': 300.0, 'period': 120.0},
-        12: {'direction': [0.0, 0.0, 1.0], 'amplitude': 120.0, 'period': 70.0},
-    }
+    motions = {}
 
-    return dynamic_motions
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            heading = math.radians(float(row['运动方向角度']))
+            entry = {
+                'direction': [math.cos(heading), 0.0, math.sin(heading)],
+                'amplitude': float(row['振幅']),
+                'period': float(row['周期']),
+            }
+            # 朝向角度列可选：缺列或留空时由调用方回退到默认朝向
+            angle = row.get('朝向角度')
+            if angle not in (None, ''):
+                entry['angle_degrees'] = float(angle)
+            motions[int(row['编号'])] = entry
+
+    return motions
 
 
 def load_points_from_csv(csv_path):
