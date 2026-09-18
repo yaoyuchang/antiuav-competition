@@ -9,6 +9,7 @@ from ..configs import subject3_config as config
 from ..planners.global_guide import GlobalGuideTracker
 from ..planners.quintic_primitive import evaluate_quintics
 from ..planners.recursive_feasibility_coordinator import RecursiveFeasibilityCoordinator
+from ..planners.route_shaping import shaped_switch_route
 from ..planners.swarm_base_batch_planner import SwarmBaseBatchPlanner
 from .swarm_long_horizon_evaluator import SwarmLongHorizonEvaluator
 from .swarm_rolling import SynchronizedSwarmRollingOrchestrator
@@ -107,8 +108,20 @@ class FinalValidationEvaluator(object):
                                        'failed_uav_id': uav,
                                        'guide_reason': guide.reason}
                             break
+                        # Space-partition this replan too: without it, every
+                        # UAV crossing the switch threshold around the same
+                        # simulation time (they started together and fly
+                        # similarly) gets an unshaped route back to a common
+                        # altitude, recreating the coplanar-bundle problem the
+                        # first leg's banding was built to avoid. Always
+                        # returns a usable route -- shaping failure falls back
+                        # to guide.waypoints, so this cannot turn a
+                        # successful plan() into a new hard failure.
+                        route = shaped_switch_route(
+                            self.global_guide_planner, guide.waypoints,
+                            float(positions[uav][1]), float(update.base_goal[2]))
                         tracker = GlobalGuideTracker(
-                            guide.waypoints, turn_aware_enabled=True,
+                            route, turn_aware_enabled=True,
                             turn_accel_ref_ratio=config.GUIDE_TURN_ACCEL_REF_RATIO)
                         self.planners[uav].replace_goal(
                             update.filtered_goal, tracker, reset_terminal=True)

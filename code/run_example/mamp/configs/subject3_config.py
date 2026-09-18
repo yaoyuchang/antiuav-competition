@@ -93,16 +93,44 @@ GUIDE_ALTITUDE_BANDS = (30.0, 60.0, 90.0)
 # reach, has space to spread.  That handful of relocated routes is nonetheless
 # what turns the bands-only terminal failure into a completed mission.
 GUIDE_CORRIDOR_SCALES = (2.5, 2.0, 1.5)
-# Altitude profile when banding is on: climb to the band by CLIMB_END, hold it
-# to CRUISE_END, rejoin the originally planned altitude by DESCENT_END, and
-# follow the planned route unchanged past that.  Unwinding the band earlier
-# (CRUISE_END 2600 / DESCENT_END 3400, i.e. before the 3500 m goal switch) was
-# tried and was worse, not better: baseline 365 vs 531 cycles.  The descend-and-
-# rejoin manoeuvre is itself what the single-UAV layer chokes on, so doing it
-# sooner only moves the failure earlier.
-GUIDE_BAND_CLIMB_END_X = 600.0
-GUIDE_BAND_CRUISE_END_X = 4000.0
-GUIDE_BAND_DESCENT_END_X = 4900.0
+# Altitude/corridor profile, expressed as fractions of the CURRENT leg's own
+# (start_x, goal_x) span rather than absolute metres, so the same
+# band_waypoints() serves both the first leg (0->5000 m) and the much shorter,
+# variably-positioned post-switch leg.  Climb to the band by CLIMB_FRACTION,
+# hold it to CRUISE_END_FRACTION, rejoin the originally planned altitude by
+# DESCENT_END_FRACTION, and follow the planned route unchanged past that.
+# These values reproduce the first leg's previously-tuned absolute breakpoints
+# exactly (0.12*5000=600, 0.80*5000=4000, 0.98*5000=4900 m). Unwinding the band
+# earlier (fractions 0.52/0.68, i.e. before the 3500 m goal switch) was tried
+# and was worse, not better: baseline 365 vs 531 cycles. The descend-and-rejoin
+# manoeuvre is itself what the single-UAV layer chokes on, so doing it sooner
+# only moves the failure earlier.
+GUIDE_BAND_CLIMB_FRACTION = 0.12
+GUIDE_BAND_CRUISE_END_FRACTION = 0.80
+GUIDE_BAND_DESCENT_END_FRACTION = 0.98
+
+# Post-switch replan profile.  A UAV crossing GOAL_SWITCH_SLANT_RANGE is
+# already at its cruise band altitude, so there is no climb to do -- the climb
+# ramp is a harmless no-op because band_altitude passed in equals the UAV's
+# current altitude (see shaped_switch_route). CLIMB_FRACTION is a small
+# positive epsilon only to satisfy band_waypoints()'s strict ordering check.
+#
+# Cruise/descent fractions are NOT a copy of the first leg's 0.80/0.98: this
+# leg is only ~1500 m (vs. 5000 m), and the worst-case altitude change is much
+# larger relative to that -- a UAV at the 90 m band switching to the rear
+# group's y=10 goal must lose 80 m. A first attempt used the first leg's "last
+# 10%" window, which on this leg leaves only ~135 m of horizontal distance for
+# that 80 m drop (~27 degrees) -- steeper than the down-acceleration budget
+# (A_Y_DOWN_MAX = 1g, tighter than the 2g climb budget) can fly, and it
+# reproduced exactly the "base single-UAV planning failed" hard failure this
+# shaping is supposed to avoid. 0.50/0.95 leaves ~45% of the leg (~675 m) for
+# the same 80 m drop (~6.8 degrees, comparable in kind to the first leg's own
+# descent slope) while still holding the pre-switch altitude through the
+# immediate post-switch window, which is where the pileup this shaping targets
+# actually happens (diagnosed within ~50 m of the switch trigger).
+GUIDE_SWITCH_BAND_CLIMB_FRACTION = 0.01
+GUIDE_SWITCH_BAND_CRUISE_END_FRACTION = 0.50
+GUIDE_SWITCH_BAND_DESCENT_END_FRACTION = 0.95
 
 # Phase-3 vectorized quintic primitive parameters.  These are engineering
 # defaults, not values stated by the competition problem.
