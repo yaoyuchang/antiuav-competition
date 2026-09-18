@@ -26,6 +26,12 @@ EVALUATION_DT_ASSUMED = 0.05
 # UAV to latch on the side nearest its neighbour and can leave less than the
 # required 3 m separation.  One metre keeps capture unambiguous and is also a
 # stricter terminal-accuracy criterion.
+# Tried 0.9 to buy extra terminal clearance; reverted (see git history /
+# PR discussion) -- it broke the previously-working 614-cycle baseline
+# (new "no coordinated candidate" failure at cycle 560, 2/24 arrived)
+# without fixing the actual observed failure, which happens mid-flight
+# (cycle ~112, mission_time ~22s) long before any UAV nears its terminal
+# capture radius. This constant is not the lever for that issue.
 GOAL_TOLERANCE_ASSUMED = 1.0
 RANDOM_SEED_ASSUMED = 0
 CURVATURE_SPEED_EPS = 1.0e-8
@@ -52,6 +58,51 @@ TURN_ANGLE_EPS = 0.017453292519943295  # 1 degree, radians
 GUIDE_TURN_ACCEL_REF_RATIO = 0.3
 TURN_PREVIEW_MIN = 20.0
 TURN_PREVIEW_MAX = 300.0
+
+# L1 altitude banding.  The A* cost is pure Euclidean length with no vertical
+# weighting, so planning 24 near-identical start/goal pairs independently
+# yields 24 near-identical routes: the swarm cruises as one coplanar bundle
+# 3.478 m apart against a 3 m hard minimum, and every conflict is pushed down
+# to the 0.2 s coordination layer.  Assigning interleaved cruise altitudes
+# (uav_index % len) separates neighbouring UAVs -- interleaved rather than
+# blocked because it is the index-adjacent UAVs that start 3.478 m apart.
+# Spacing must exceed 2 * max(PRIMITIVE_VERTICAL_OFFSETS) = 20 m, otherwise L2
+# re-mixes the bands on its own.
+#
+# Bands alone are NOT sufficient -- they must be paired with the corridors
+# below.  Measured, competition mode, seed 0, as "hardcoded baseline / CSV":
+#   no banding                 614 ok 24/24  /  112 FAIL 0/24
+#   (30,60,90) bands only      531 FAIL      /  562 FAIL 1/24
+#   (30,50,70) bands only      382 FAIL      /  -
+#   (30,60,90) + corridors     583 ok 24/24  /  583 ok 24/24
+# Bands alone only move the failure from the cruise phase to the terminal
+# phase; adding corridors clears both, and the two configurations then land on
+# the same result, i.e. the millimetre-level CSV rounding that used to decide
+# success no longer changes the outcome.  Empty tuple disables banding.
+GUIDE_ALTITUDE_BANDS = (30.0, 60.0, 90.0)
+# Lateral corridors, layered on top of the altitude bands.  Each UAV's cruise
+# section is pushed sideways to goal_z * scale, so corridor order matches goal
+# order and the routes never have to cross when they converge at the end.
+# Unlike raising a route, shifting it sideways can move it into an obstacle, so
+# each UAV tries these scales in order and keeps the first whose every segment
+# clears the real obstacle geometry; an empty tuple disables corridors.
+# Most UAVs degrade all the way to no corridor: measured at mid-cruise, all 24
+# planned routes thread the same lateral gap at z between -8 and -13 m
+# regardless of their -40..+40 starts and -100..+130 goals, so there is simply
+# no lateral room down low.  Only the 90 m band, where just 4 obstacles still
+# reach, has space to spread.  That handful of relocated routes is nonetheless
+# what turns the bands-only terminal failure into a completed mission.
+GUIDE_CORRIDOR_SCALES = (2.5, 2.0, 1.5)
+# Altitude profile when banding is on: climb to the band by CLIMB_END, hold it
+# to CRUISE_END, rejoin the originally planned altitude by DESCENT_END, and
+# follow the planned route unchanged past that.  Unwinding the band earlier
+# (CRUISE_END 2600 / DESCENT_END 3400, i.e. before the 3500 m goal switch) was
+# tried and was worse, not better: baseline 365 vs 531 cycles.  The descend-and-
+# rejoin manoeuvre is itself what the single-UAV layer chokes on, so doing it
+# sooner only moves the failure earlier.
+GUIDE_BAND_CLIMB_END_X = 600.0
+GUIDE_BAND_CRUISE_END_X = 4000.0
+GUIDE_BAND_DESCENT_END_X = 4900.0
 
 # Phase-3 vectorized quintic primitive parameters.  These are engineering
 # defaults, not values stated by the competition problem.

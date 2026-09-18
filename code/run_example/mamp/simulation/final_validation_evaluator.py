@@ -228,8 +228,11 @@ class FinalValidationEvaluator(object):
                 break
             if stop_on_all_arrived and np.all(arrival):
                 break
-        success = failure is None and (len(logs) == int(cycles) or
-                                       (stop_on_all_arrived and np.all(arrival)))
+        # bool(), not np.bool_: np.all() leaks a numpy scalar that json.dump
+        # rejects, and the all-arrived branch is exactly the success case.
+        success = bool(failure is None and
+                       (len(logs) == int(cycles) or
+                        (stop_on_all_arrived and np.all(arrival))))
         return FinalScenarioResult(
             label, success, 'success' if success else failure['reason'],
             len(logs), None if failure is None else failure['cycle'],
