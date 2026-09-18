@@ -104,29 +104,49 @@ def band_waypoints(guide_planner, waypoints, band_altitude, lateral_offset=0.,
     return banded
 
 
-def shaped_initial_route(guide_planner, waypoints, uav_index, goal_z):
+def shaped_initial_route(guide_planner, waypoints, uav_index, goal_z,
+                         lane_offset=None):
     """Return the banded/corridored first-leg route for one UAV, degrading on
     failure.
 
-    Corridor scales are tried widest first and the first one whose every
-    segment clears the real obstacles wins; then altitude-only; then the
-    planned route untouched.  Widening laterally is what needs the degradation
-    ladder -- obstacles 6 (z=-500), 9 (z=-433) and 13 (z=467) sit far off the
-    centreline, so the widest corridors are not always flyable.
+    ``lane_offset`` (from lane_assignment.assign_lane_offsets(), computed
+    once for the whole fleet from where UAVs are actually headed after the
+    goal switch, not from this UAV's own first-leg goal) is tried at full
+    strength, then discounted back toward 0 in GUIDE_LANE_DISCOUNT_LADDER
+    steps, then altitude-only, then the planned route untouched -- each step
+    re-validated against real obstacle geometry inside band_waypoints().
+    Discounting is needed for the same reason the old fixed corridor scales
+    needed a ladder: shifting sideways can clip an obstacle even when the
+    lane itself was checked reachable along a coarse probe grid.
+
+    When GUIDE_LANE_ASSIGNMENT_ENABLED is False (or lane_offset is None,
+    e.g. a caller that hasn't computed lane assignment), this falls back to
+    the original fixed-scale corridor ladder -- goal_z*(scale-1), widest
+    first -- which is what produced the last known-good baseline (583
+    cycles) before lane assignment existed. Both goal_z and this fallback
+    stay here, unremoved, specifically so that flipping the switch reproduces
+    that exact prior behaviour instead of a re-derived approximation of it.
     """
     bands = config.GUIDE_ALTITUDE_BANDS
     if not bands:
         return waypoints
     band_altitude = bands[uav_index % len(bands)]
-    # goal_z is monotonic in UAV index, so scaling it keeps corridor order and
-    # goal order identical and the routes never cross as they converge. This
-    # is safe here because the first leg's goal_z stays within +-130 m, well
-    # inside the +-680 m grid bound even at the widest (2.5x) scale.
-    for scale in config.GUIDE_CORRIDOR_SCALES:
-        shaped = band_waypoints(guide_planner, waypoints, band_altitude,
-                                goal_z * (scale - 1.))
-        if shaped is not None:
-            return shaped
+    if config.GUIDE_LANE_ASSIGNMENT_ENABLED and lane_offset is not None:
+        for discount in config.GUIDE_LANE_DISCOUNT_LADDER:
+            shaped = band_waypoints(guide_planner, waypoints, band_altitude,
+                                    lane_offset * discount)
+            if shaped is not None:
+                return shaped
+    else:
+        # goal_z is monotonic in UAV index, so scaling it keeps corridor
+        # order and goal order identical and the routes never cross as they
+        # converge. Safe here because the first leg's goal_z stays within
+        # +-130 m, well inside the +-680 m grid bound even at 2.5x.
+        for scale in config.GUIDE_CORRIDOR_SCALES:
+            shaped = band_waypoints(guide_planner, waypoints, band_altitude,
+                                    goal_z * (scale - 1.))
+            if shaped is not None:
+                return shaped
     shaped = band_waypoints(guide_planner, waypoints, band_altitude)
     return waypoints if shaped is None else shaped
 
