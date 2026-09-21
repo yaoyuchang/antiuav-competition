@@ -1,0 +1,4 @@
+
+# npm（生成Word文档时临时安装）
+node_modules/
+package-lock.json

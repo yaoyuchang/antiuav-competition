@@ -46,7 +46,9 @@ class RecedingHorizonPlanner(object):
     def __init__(self, guide_tracker, obstacles, generator=None,
                  static_selector=None, dynamic_selector=None,
                  global_astar_calls=0, goal=None, terminal_capture_speed=None,
-                 legacy_terminal_envelope=False):
+                 legacy_terminal_envelope=False, terminal_release_delay=0.0,
+                 terminal_wait_reference_speed=None,
+                 terminal_goal_direction_distance=None):
         self.guide_tracker = guide_tracker
         self.generator = generator or QuinticPrimitiveGenerator()
         self.static_selector = static_selector or StaticPrimitiveSelector(obstacles)
@@ -58,7 +60,10 @@ class RecedingHorizonPlanner(object):
         self.terminal_policy = (None if goal is None else
                                 TerminalPolicy(self.goal, self.generator,
                                                terminal_capture_speed,
-                                               legacy_terminal_envelope))
+                                               legacy_terminal_envelope,
+                                               terminal_release_delay,
+                                               terminal_wait_reference_speed,
+                                               terminal_goal_direction_distance))
 
     def replace_goal(self, goal, guide_tracker=None, reset_terminal=False):
         """Update the planning goal; reset the goal-version latch only on a switch."""
@@ -70,8 +75,17 @@ class RecedingHorizonPlanner(object):
                        else self.terminal_policy.capture_speed)
             legacy = (False if self.terminal_policy is None else
                       self.terminal_policy.legacy_envelope)
+            release_delay = (0.0 if self.terminal_policy is None else
+                             self.terminal_policy.release_delay)
+            wait_speed = (None if self.terminal_policy is None else
+                          self.terminal_policy.wait_reference_speed)
+            goal_direction_distance = (
+                None if self.terminal_policy is None else
+                self.terminal_policy.goal_direction_distance)
             self.terminal_policy = TerminalPolicy(self.goal, self.generator,
-                                                  capture, legacy)
+                                                  capture, legacy,
+                                                  release_delay, wait_speed,
+                                                  goal_direction_distance)
         else:
             self.terminal_policy.goal = self.goal.copy()
 

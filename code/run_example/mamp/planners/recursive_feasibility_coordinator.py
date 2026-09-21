@@ -62,7 +62,7 @@ class RecursiveFeasibilityCoordinator(SwarmCoordinator):
         k5 = LocalJointCoordinator(
             collision_checker=self.collision_checker,
             reservation_mode=self.reservation_mode,
-            candidate_chunk=self.candidate_chunk, top_k=5)
+            candidate_chunk=self.candidate_chunk, top_k=30)
         second = k5.coordinate(plans, states, planning_time, uav_ids,
                                goal_versions)
         future = None
@@ -76,9 +76,48 @@ class RecursiveFeasibilityCoordinator(SwarmCoordinator):
                 time.perf_counter() - start - second.planning_time)
         if second.success:
             self.future_feasibility_rejection_count += 1
+        resolution = second.local_joint_resolution
+        if (not second.success and resolution.fallback_reason is not None and
+                resolution.fallback_reason.startswith(
+                    'post-joint sequential continuation failed')):
+            expanded = LocalJointCoordinator(
+                collision_checker=self.collision_checker,
+                reservation_mode=self.reservation_mode,
+                candidate_chunk=self.candidate_chunk, top_k=30,
+                maximum_cluster_size=8,
+                expand_priority_followers=True).coordinate(
+                    plans, states, planning_time, uav_ids, goal_versions)
+            expanded_future = None
+            if expanded.success and self.future_feasibility_enabled:
+                expanded_future = one_step_future_feasibility(
+                    self.planners, plans, expanded.selected_indices,
+                    planning_time,
+                    uav_ids=expanded.local_joint_resolution.cluster_uav_ids)
+            if (expanded.success and (not self.future_feasibility_enabled or
+                                      expanded_future.success)):
+                return self._decorate(
+                    expanded, 30, expanded_future,
+                    time.perf_counter() - start - expanded.planning_time)
+            if expanded.success:
+                self.future_feasibility_rejection_count += 1
         self.fallback_count += 1
         fallback = super(RecursiveFeasibilityCoordinator, self).coordinate(
             plans, states, planning_time, uav_ids, goal_versions)
+        if fallback.failure_snapshot is not None:
+            fallback.failure_snapshot['joint_repair_diagnostics'] = {
+                'k3': {
+                    'cluster': first.local_joint_resolution.cluster_uav_ids.copy(),
+                    'reason': first.local_joint_resolution.fallback_reason,
+                    'nodes': first.local_joint_resolution.candidate_node_count,
+                    'combinations': first.local_joint_resolution.enumeration_count,
+                },
+                'expanded': {
+                    'cluster': second.local_joint_resolution.cluster_uav_ids.copy(),
+                    'reason': second.local_joint_resolution.fallback_reason,
+                    'nodes': second.local_joint_resolution.candidate_node_count,
+                    'combinations': second.local_joint_resolution.enumeration_count,
+                },
+            }
         return self._decorate(
             fallback, 5, future,
             time.perf_counter() - start - fallback.planning_time)

@@ -36,7 +36,9 @@ class TerminalRanking:
 
 
 class TerminalPolicy(object):
-    def __init__(self, goal, generator, capture_speed=None, legacy_envelope=False):
+    def __init__(self, goal, generator, capture_speed=None, legacy_envelope=False,
+                 release_delay=0.0, wait_reference_speed=None,
+                 goal_direction_distance=None):
         self.goal = np.asarray(goal, dtype='float64')
         if self.goal.shape != (3,):
             raise ValueError('goal must have shape (3,)')
@@ -48,6 +50,14 @@ class TerminalPolicy(object):
         self.legacy_envelope = bool(legacy_envelope)
         self.terminal_mode = False
         self.entry_snapshot = None
+        self.release_delay = float(release_delay)
+        self.wait_reference_speed = (None if wait_reference_speed is None else
+                                     float(wait_reference_speed))
+        self.release_time = None
+        self.current_mission_time = 0.0
+        self.goal_direction_distance = float(
+            config.TERMINAL_GOAL_DIRECTION_DISTANCE if goal_direction_distance is None
+            else goal_direction_distance)
 
     @staticmethod
     def reference_speed(distance, capture_speed=0.0):
@@ -58,6 +68,7 @@ class TerminalPolicy(object):
 
     def update_mode(self, remaining_guide_distance, mission_time, position,
                     speed):
+        self.current_mission_time = float(mission_time)
         if (not self.terminal_mode and
                 remaining_guide_distance <= config.TERMINAL_TRIGGER_DISTANCE):
             self.terminal_mode = True
@@ -68,6 +79,7 @@ class TerminalPolicy(object):
                 'remaining_guide_distance': float(remaining_guide_distance),
                 'goal_distance': float(np.linalg.norm(self.goal - position)),
             }
+            self.release_time = float(mission_time) + self.release_delay
         return self.terminal_mode
 
     def terminal_direction(self, position, guide_direction,
@@ -75,7 +87,7 @@ class TerminalPolicy(object):
         goal_delta = self.goal - position
         norm = float(np.linalg.norm(goal_delta))
         if ((on_last_segment or remaining_guide_distance <=
-             config.TERMINAL_GOAL_DIRECTION_DISTANCE) and norm > 1.0e-12):
+             self.goal_direction_distance) and norm > 1.0e-12):
             return goal_delta / norm
         return np.asarray(guide_direction, dtype='float64')
 
@@ -116,6 +128,10 @@ class TerminalPolicy(object):
         goal_distance = float(np.linalg.norm(self.goal - position))
         effective_capture = 0.0 if self.legacy_envelope else self.capture_speed
         reference = self.reference_speed(goal_distance, effective_capture)
+        if (self.release_time is not None and
+                self.current_mission_time < self.release_time and
+                self.wait_reference_speed is not None):
+            reference = min(reference, self.wait_reference_speed)
         current_parallel = max(float(np.dot(velocity, direction)), 0.0)
         speeds = self.speed_candidates(reference, current_parallel)
         scale = float(np.clip(goal_distance / config.TERMINAL_TRIGGER_DISTANCE,

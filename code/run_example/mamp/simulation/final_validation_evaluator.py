@@ -58,7 +58,7 @@ def timing_summary(values):
 class FinalValidationEvaluator(object):
     def __init__(self, planners, obstacles, goal_managers=None,
                  global_guide_planner=None, cycle_deadline=.2,
-                 arrival_handling='hold'):
+                 arrival_handling='hold', coordination_reservation_mode='first_safe'):
         self.planners = tuple(planners)
         self.obstacles = tuple(obstacles)
         self.goal_managers = (None if goal_managers is None else
@@ -66,7 +66,8 @@ class FinalValidationEvaluator(object):
         self.global_guide_planner = global_guide_planner
         self.cycle_deadline = float(cycle_deadline)
         self.batcher = SwarmBaseBatchPlanner()
-        self.coordinator = RecursiveFeasibilityCoordinator(self.planners)
+        self.coordinator = RecursiveFeasibilityCoordinator(
+            self.planners, reservation_mode=coordination_reservation_mode)
         self.safety = SwarmLongHorizonEvaluator(obstacles)
         self.execution_times = np.linspace(
             0., config.EXECUTION_HORIZON,

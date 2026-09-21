@@ -1,7 +1,9 @@
 """标准化规划器运行脚本（带配置文件接口）"""
 import argparse
+import csv
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 # 添加mamp模块到路径
@@ -13,8 +15,32 @@ from mamp.simulation.mission_metrics import compute_energy_and_smoothness
 from config_loader import load_obstacles_from_csv, load_points_from_csv, get_config_path
 
 
+def _apply_goal_overrides(goals, overrides, label):
+    """Return a copy of goals with 1-based UAV coordinate overrides applied."""
+    result = np.asarray(goals, dtype='float64').copy()
+    for uav, x, y, z in overrides or []:
+        if not float(uav).is_integer():
+            raise ValueError(f'{label}目标的无人机编号必须是整数，收到 {uav}')
+        index = int(uav) - 1
+        if index < 0 or index >= len(result):
+            raise ValueError(f'{label}目标的无人机编号必须在 1..{len(result)}，收到 {uav}')
+        result[index] = [float(x), float(y), float(z)]
+        print(f'覆盖{label}目标: UAV {int(uav)} -> ({x}, {y}, {z})')
+    return result
+
+
+def _write_points_csv(csv_path, points):
+    """Write point data in the same format accepted by config_loader."""
+    with open(csv_path, 'w', newline='', encoding='utf-8') as handle:
+        writer = csv.writer(handle)
+        writer.writerow(['无人机编号', 'X(m)', 'Y(高度)', 'Z(侧向)'])
+        for index, (x, y, z) in enumerate(points, start=1):
+            writer.writerow([index, x, y, z])
+
+
 def run_planner_with_config(config_dir, mode='fixed', cycles=2000,
-                            output_file=None, seed=0):
+                            output_file=None, seed=0, initial_goal_overrides=None,
+                            changed_goal_overrides=None):
     """使用配置文件运行规划器
 
     Args:
@@ -23,6 +49,8 @@ def run_planner_with_config(config_dir, mode='fixed', cycles=2000,
         cycles: 最大规划周期数
         output_file: 输出文件路径
         seed: 随机种子
+        initial_goal_overrides: 初始目标覆盖列表，每项为 (无人机编号, x, y, z)
+        changed_goal_overrides: 切换后目标覆盖列表，每项为 (无人机编号, x, y, z)
 
     Returns:
         dict: 规划结果和性能指标
@@ -66,6 +94,11 @@ def run_planner_with_config(config_dir, mode='fixed', cycles=2000,
         changed_goals = subject3_environment.build_subject3_changed_goals()
         print(f"使用默认切换后终点配置")
 
+    initial_goals = _apply_goal_overrides(
+        initial_goals, initial_goal_overrides, '初始')
+    changed_goals = _apply_goal_overrides(
+        changed_goals, changed_goal_overrides, '切换后')
+
     # 2. 初始化规划器（使用原有的formal_case函数）
     print(f"\n正在初始化规划器 (mode={mode}, seed={seed})...")
     from run_phase6b_final_validation import formal_case
@@ -73,14 +106,21 @@ def run_planner_with_config(config_dir, mode='fixed', cycles=2000,
     # competition模式需要特殊处理：先创建switch模式，再启用扰动
     formal_mode = 'switch' if mode == 'competition' else mode
 
-    # 传入CSV路径给formal_case
-    evaluator, _, _ = formal_case(
-        mode=formal_mode,
-        seed=seed,
-        starts_csv=str(starts_csv) if starts_csv.exists() else None,
-        initial_goals_csv=str(initial_goals_csv) if initial_goals_csv.exists() else None,
-        changed_goals_csv=str(changed_goals_csv) if changed_goals_csv.exists() else None
-    )
+    # 将已加载且可能被命令行覆盖的目标写入临时配置，确保全局路径规划器、
+    # 局部规划器和目标管理器使用完全相同的坐标；原始CSV不会被修改。
+    with tempfile.TemporaryDirectory(prefix='mamp-goals-') as temp_dir:
+        temp_path = Path(temp_dir)
+        effective_initial_csv = temp_path / 'goal_points_initial.csv'
+        effective_changed_csv = temp_path / 'goal_points_changed.csv'
+        _write_points_csv(effective_initial_csv, initial_goals)
+        _write_points_csv(effective_changed_csv, changed_goals)
+        evaluator, _, _ = formal_case(
+            mode=formal_mode,
+            seed=seed,
+            starts_csv=str(starts_csv) if starts_csv.exists() else None,
+            initial_goals_csv=str(effective_initial_csv),
+            changed_goals_csv=str(effective_changed_csv)
+        )
     # "单次规划时长"官方口径：一次产出全部24条完整路径的用时（L1全局引导），
     # 与下面滚动时域的单周期耗时（timing_summary_ms）是两个不同的指标。
     single_planning_duration_seconds = evaluator.single_planning_duration_seconds
@@ -213,6 +253,14 @@ def main():
                        help='输出文件路径 (默认: output/trajectory_output.json)')
     parser.add_argument('--seed', type=int, default=0,
                        help='随机种子 (默认: 0)')
+    parser.add_argument(
+        '--initial-goal', action='append', nargs=4, type=float,
+        metavar=('UAV', 'X', 'Y', 'Z'),
+        help='覆盖初始目标点，可重复使用；UAV编号从1开始')
+    parser.add_argument(
+        '--changed-goal', action='append', nargs=4, type=float,
+        metavar=('UAV', 'X', 'Y', 'Z'),
+        help='覆盖切换后目标点，可重复使用；UAV编号从1开始')
 
     args = parser.parse_args()
 
@@ -222,7 +270,9 @@ def main():
         mode=args.mode,
         cycles=args.cycles,
         output_file=args.output,
-        seed=args.seed
+        seed=args.seed,
+        initial_goal_overrides=args.initial_goal,
+        changed_goal_overrides=args.changed_goal
     )
 
     # 返回成功/失败状态

@@ -6,9 +6,11 @@ import numpy as np
 
 from mamp.agents.obstacle import Obstacle
 from mamp.configs import subject3_config as config
-from mamp.envs.subject3_environment import Subject3Environment
+from mamp.envs.subject3_environment import (
+    Subject3Environment, build_global_guide_obstacles)
 from mamp.planners.global_guide import GlobalGuidePlanner, GlobalGuideTracker
 from mamp.planners.goal_manager import DynamicGoalModel, GoalManager
+from mamp.planners.quintic_primitive import QuinticPrimitiveGenerator
 from mamp.planners.receding_horizon_planner import RecedingHorizonPlanner
 from mamp.planners.route_shaping import shaped_initial_route
 from mamp.simulation.final_validation_evaluator import (
@@ -41,7 +43,14 @@ def formal_case(mode='fixed', seed=0, starts_csv=None, initial_goals_csv=None,
     )
     boundary = np.vstack((environment.starts, environment.initial_goals,
                           environment.changed_goals))
-    guide_planner = GlobalGuidePlanner(environment.obstacles, boundary,
+    guide_obstacles, swept_envelopes = build_global_guide_obstacles(
+        environment.obstacles)
+    if swept_envelopes:
+        summary = ', '.join('{}号({:.2f}m/s)'.format(
+            item.swept_dynamic_source_id, item.swept_dynamic_peak_speed)
+            for item in swept_envelopes)
+        print('全局A*启用动态扫掠静态包络: {}'.format(summary))
+    guide_planner = GlobalGuidePlanner(guide_obstacles, boundary,
                                        vertical_reserve=10.)
     planning_start = time.perf_counter()
     routes = []
@@ -57,11 +66,24 @@ def formal_case(mode='fixed', seed=0, starts_csv=None, initial_goals_csv=None,
     planners = [RecedingHorizonPlanner(
         GlobalGuideTracker(waypoints, turn_aware_enabled=True,
                            turn_accel_ref_ratio=.3), environment.obstacles,
+        generator=(QuinticPrimitiveGenerator(
+            delta_speeds=config.FAST_DYNAMIC_SWEEP_DELTA_SPEED_CANDIDATES)
+            if swept_envelopes else None),
         # Dense terminal points are only 5 m apart.  A zero capture speed lets
         # each UAV settle into its 3 m arrival ball without flying through an
         # adjacent UAV that is already holding position.
-        goal=goal, terminal_capture_speed=0.)
-        for waypoints, goal in zip(routes, environment.initial_goals)]
+        goal=goal, terminal_capture_speed=0.,
+        terminal_release_delay=(
+            (uav % 8) * config.FAST_SWEEP_TERMINAL_STAGGER_SECONDS
+            if swept_envelopes else 0.0),
+        terminal_wait_reference_speed=(
+            config.FAST_SWEEP_TERMINAL_WAIT_REFERENCE_SPEED
+            if swept_envelopes else None),
+        terminal_goal_direction_distance=(
+            config.FAST_SWEEP_TERMINAL_GOAL_DIRECTION_DISTANCE
+            if swept_envelopes else None))
+        for uav, (waypoints, goal) in enumerate(
+            zip(routes, environment.initial_goals))]
     if mode == 'fixed':
         managers = None
     else:

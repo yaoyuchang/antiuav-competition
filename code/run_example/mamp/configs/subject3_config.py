@@ -9,6 +9,23 @@ NUM_UAV = 24
 UAV_SAFE_DISTANCE = 3.0
 OBS_SAFE_DISTANCE = 1.5
 V_MAX = 50.0
+
+# Fast periodic obstacles are too quick for a short receding-horizon window to
+# avoid reliably.  The global guide treats their complete sinusoidal swept
+# volume as a conservative static obstacle when the peak translation speed
+# reaches this threshold.  Local planning and safety auditing still use the
+# real time-varying obstacle geometry.
+ENABLE_FAST_DYNAMIC_SWEEP_GUIDES = True
+FAST_DYNAMIC_SWEEP_SPEED_THRESHOLD = 2.0 * V_MAX
+FAST_DYNAMIC_SWEEP_DELTA_SPEED_CANDIDATES = (-30.0, -20.0, -10.0, 0.0,
+                                             10.0, 20.0)
+# Start aligning with the true goal as soon as terminal mode begins.  The
+# constant is repeated here because the generic terminal constants are defined
+# later in this module.
+FAST_SWEEP_TERMINAL_GOAL_DIRECTION_DISTANCE = 250.0
+TERMINAL_PREFERRED_UAV_CLEARANCE = 3.2
+FAST_SWEEP_TERMINAL_STAGGER_SECONDS = 3.0
+FAST_SWEEP_TERMINAL_WAIT_REFERENCE_SPEED = 30.0
 # The statement uses multiples of g but does not state its numeric value.
 # Conventional numerical assumption; change here if the organizer specifies it.
 G = 9.81

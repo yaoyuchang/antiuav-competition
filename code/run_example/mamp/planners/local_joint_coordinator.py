@@ -1,7 +1,6 @@
 """Bounded local joint assignment for failed sequential reservations."""
 
 from dataclasses import dataclass
-import itertools
 import time
 
 import numpy as np
@@ -75,15 +74,16 @@ def _safe_options(plan, fixed_reservations, checker, top_k):
 
 
 def solve_local_joint_assignment(plans, cluster_uav_ids, fixed_reservations,
-                                 checker, top_k=3):
+                                 checker, top_k=3, maximum_combinations=250000):
     """Enumerate at most K^N local assignments using sum of formal ranks."""
     start = time.perf_counter()
     cluster = np.asarray(cluster_uav_ids, dtype='int64')
-    if len(cluster) > 5:
+    if len(cluster) > 8:
         return LocalJointResolution(True, False, cluster, 0, 0, 0, 0, {},
-                                    None, None, 'cluster size exceeds 5',
+                                    None, None, 'cluster size exceeds 8',
                                     time.perf_counter() - start)
-    options = [_safe_options(plans[uav], fixed_reservations, checker, top_k)
+    bounded_k = int(top_k)
+    options = [_safe_options(plans[uav], fixed_reservations, checker, bounded_k)
                for uav in cluster]
     node_count = sum(len(item) for item in options)
     upper_bound = int(np.prod([len(item) for item in options], dtype='int64'))
@@ -107,23 +107,39 @@ def solve_local_joint_assignment(plans, cluster_uav_ids, fixed_reservations,
             conflict_edges += int(np.count_nonzero(distance < threshold))
     best = None
     enumerated = 0
-    for option_indices in itertools.product(
-            *[range(len(item)) for item in options]):
-        enumerated += 1
-        combination = tuple(options[index][option_index]
-                            for index, option_index in enumerate(option_indices))
-        distances = [pair_distances[(first, second)][
-            option_indices[first], option_indices[second]]
-            for first in range(len(cluster))
-            for second in range(first + 1, len(cluster))]
-        if any(value < threshold for value in distances):
-            continue
-        rank_cost = int(sum(item[0] for item in combination))
-        indices = tuple(item[1] for item in combination)
-        key = (rank_cost, indices)
-        if best is None or key < best[0]:
-            best = (key, combination, float(np.min(distances)) if len(distances)
-                    else float('inf'))
+    selected_options = []
+    def search(depth, running_minimum):
+        nonlocal best, enumerated
+        if enumerated >= int(maximum_combinations):
+            return
+        if depth == len(cluster):
+            enumerated += 1
+            combination = tuple(options[index][option_index]
+                                for index, option_index in enumerate(selected_options))
+            minimum_distance = running_minimum
+            rank_cost = int(sum(item[0] for item in combination))
+            indices = tuple(item[1] for item in combination)
+            key = (-minimum_distance, rank_cost, indices)
+            if best is None or key < best[0]:
+                best = (key, combination, minimum_distance)
+            return
+        for option_index in range(len(options[depth])):
+            distances = [pair_distances[(previous, depth)][
+                selected_options[previous], option_index]
+                for previous in range(depth)]
+            enumerated += 1
+            if any(value < threshold for value in distances):
+                if enumerated >= int(maximum_combinations):
+                    return
+                continue
+            selected_options.append(option_index)
+            candidate_minimum = (running_minimum if not distances else
+                min(running_minimum, float(np.min(distances))))
+            search(depth + 1, candidate_minimum)
+            selected_options.pop()
+            if enumerated >= int(maximum_combinations):
+                return
+    search(0, float('inf'))
     if best is None:
         return LocalJointResolution(True, False, cluster, node_count,
                                     conflict_edges, enumerated, upper_bound, {},
@@ -133,7 +149,7 @@ def solve_local_joint_assignment(plans, cluster_uav_ids, fixed_reservations,
                     for uav, item in zip(cluster, best[1]))
     return LocalJointResolution(True, True, cluster, node_count,
                                 conflict_edges, enumerated, upper_bound, selected,
-                                best[0][0], best[2], None,
+                                best[0][1], best[2], None,
                                 time.perf_counter() - start)
 
 
@@ -141,6 +157,8 @@ class LocalJointCoordinator(SwarmCoordinator):
     def __init__(self, *args, **kwargs):
         self.top_k = int(kwargs.pop('top_k', 3))
         self.maximum_cluster_size = int(kwargs.pop('maximum_cluster_size', 5))
+        self.expand_priority_followers = bool(
+            kwargs.pop('expand_priority_followers', False))
         super(LocalJointCoordinator, self).__init__(*args, **kwargs)
         self.joint_solved_count = 0
         self.fallback_count = 0
@@ -162,6 +180,27 @@ class LocalJointCoordinator(SwarmCoordinator):
         cluster, _, _ = extract_failure_cluster(
             plans[failed], baseline.reservations, self.collision_checker, failed,
             self.maximum_cluster_size)
+        if self.expand_priority_followers:
+            # Terminal congestion involves both already-reserved and pending
+            # neighbours.  Expand by current spatial proximity so the whole
+            # dense destination group can be reassigned together.
+            expanded = [int(value) for value in cluster]
+            ids = (np.arange(len(states), dtype='int64') if uav_ids is None
+                   else np.asarray(uav_ids, dtype='int64'))
+            id_to_offset = {int(value): offset for offset, value in enumerate(ids)}
+            failed_position = np.asarray(states[id_to_offset[failed]][0])
+            proximity = []
+            for candidate_id in ids:
+                candidate = int(candidate_id)
+                distance = float(np.linalg.norm(
+                    np.asarray(states[id_to_offset[candidate]][0]) - failed_position))
+                proximity.append((distance, candidate))
+            for _, candidate in sorted(proximity):
+                if candidate not in expanded:
+                    expanded.append(candidate)
+                if len(expanded) >= self.maximum_cluster_size:
+                    break
+            cluster = np.asarray(expanded, dtype='int64')
         cluster_set = set(int(x) for x in cluster)
         fixed = [item for item in baseline.reservations
                  if item.uav_id not in cluster_set]

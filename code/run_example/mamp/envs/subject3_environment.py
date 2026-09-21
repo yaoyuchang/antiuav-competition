@@ -181,6 +181,56 @@ def build_subject3_obstacles():
     return obstacles
 
 
+def build_global_guide_obstacles(obstacles, enabled=None, speed_threshold=None):
+    """Add conservative static swept envelopes for sufficiently fast obstacles.
+
+    A sinusoid translates its fixed-orientation body over the line segment
+    ``[-amplitude, +amplitude]``.  The axis-aligned box below contains that
+    entire swept volume.  It is used only by the global guide; callers retain
+    the original dynamic obstacles for rolling prediction and safety audits.
+    """
+    enabled = (config.ENABLE_FAST_DYNAMIC_SWEEP_GUIDES if enabled is None
+               else bool(enabled))
+    threshold = (config.FAST_DYNAMIC_SWEEP_SPEED_THRESHOLD
+                 if speed_threshold is None else float(speed_threshold))
+    result = list(obstacles)
+    if not enabled:
+        return result, tuple()
+    if threshold < 0.0:
+        raise ValueError('fast dynamic sweep speed threshold must be non-negative')
+
+    envelopes = []
+    for obstacle in obstacles:
+        if obstacle.is_static or not obstacle.motion:
+            continue
+        peak_speed = obstacle.translation_speed_bound()
+        if peak_speed < threshold:
+            continue
+        if obstacle.shape not in ('cube', 'rotated_cube'):
+            raise ValueError('dynamic swept guide currently requires a cuboid obstacle')
+        direction = obstacle._motion_direction()
+        amplitude = abs(float(obstacle.motion['amplitude']))
+        cosine, sine = abs(math.cos(obstacle.initial_angle)), abs(math.sin(obstacle.initial_angle))
+        body_extent_x = (cosine * obstacle.length + sine * obstacle.width) / 2.0
+        body_extent_z = (sine * obstacle.length + cosine * obstacle.width) / 2.0
+        extent_x = body_extent_x + amplitude * abs(float(direction[0]))
+        extent_z = body_extent_z + amplitude * abs(float(direction[2]))
+        shape = {
+            'shape': 'cube',
+            'length': 2.0 * extent_x,
+            'width': 2.0 * extent_z,
+            'height': obstacle.height,
+            'competition_id': obstacle.competition_id,
+        }
+        envelope = Obstacle(obstacle.initial_pos_global_frame, shape,
+                            'dynamic-sweep-{}'.format(obstacle.competition_id))
+        envelope.swept_dynamic_source_id = obstacle.competition_id
+        envelope.swept_dynamic_peak_speed = peak_speed
+        envelopes.append(envelope)
+        result.append(envelope)
+    return result, tuple(envelopes)
+
+
 class Subject3Environment(object):
     """Own obstacle time, geometry queries and safety-margin checks."""
 

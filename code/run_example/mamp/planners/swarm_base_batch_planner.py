@@ -151,7 +151,7 @@ class SwarmBaseBatchPlanner(object):
         validation_time = time.perf_counter() - validation_start
 
         static_start = time.perf_counter()
-        static_minimum, _, static_statistics = pooled_static_clearance(
+        static_minimum, static_closest_id, static_statistics = pooled_static_clearance(
             positions, checker.static_obstacles)
         peak_distance_bytes = static_statistics['peak_distance_bytes']
         static_safe = static_minimum >= (config.OBS_SAFE_DISTANCE +
@@ -295,10 +295,39 @@ class SwarmBaseBatchPlanner(object):
                 dynamic_guard, max_translation, max_rotation, prediction_time,
                 dynamic_time, 0., 0., prediction_time + dynamic_time)
             success = bool(len(phase5_ranked))
+            failure_snapshot = None
+            if not success:
+                state = states[uav_index]
+                coarse_count = int(np.count_nonzero(coarse[sl]))
+                fine_count = int(np.count_nonzero(fine_dynamic[sl]))
+                phase4_count = int(np.count_nonzero(phase4_valid[sl]))
+                nearest_static_local = int(np.argmin(static_minimum[sl]))
+                nearest_dynamic_local = int(np.argmin(dynamic_minimum[sl]))
+                failure_snapshot = {
+                    'planning_time': float(planning_time),
+                    'uav_offset': int(uav_index),
+                    'mode': item[3],
+                    'position': np.asarray(state[0]).copy(),
+                    'velocity': np.asarray(state[1]).copy(),
+                    'acceleration': np.asarray(state[2]).copy(),
+                    'candidate_count': int(hi - lo),
+                    'phase3_feasible_count': coarse_count,
+                    'fine_dynamic_count': fine_count,
+                    'phase4_valid_count': phase4_count,
+                    'phase5_valid_count': int(len(phase5_ranked)),
+                    'nearest_static_obstacle_id': int(
+                        static_closest_id[lo + nearest_static_local]),
+                    'minimum_static_clearance': float(
+                        static_minimum[lo + nearest_static_local]),
+                    'nearest_dynamic_obstacle_id': int(
+                        closest_id[lo + nearest_dynamic_local]),
+                    'minimum_dynamic_clearance': float(
+                        dynamic_minimum[lo + nearest_dynamic_local]),
+                }
             plans.append(BatchBasePlan(
                 success, 'success' if success else 'base batch planning failed',
                 0., batch, static_selection, dynamic_selection,
-                item[1], item[2], item[3]))
+                item[1], item[2], item[3], failure_snapshot))
         phase5_time = time.perf_counter() - phase5_start
         elapsed = time.perf_counter() - total_start
         for plan in plans:

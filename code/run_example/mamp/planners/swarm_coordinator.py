@@ -64,8 +64,9 @@ class SwarmCoordinator(object):
     def __init__(self, collision_checker=None, reservation_mode='first_safe',
                  candidate_chunk=4):
         self.collision_checker = collision_checker or SwarmTrajectoryCollisionChecker()
-        if reservation_mode not in ('first_safe', 'full_debug'):
-            raise ValueError('reservation_mode must be first_safe or full_debug')
+        if reservation_mode not in ('first_safe', 'full_debug', 'max_clearance',
+                                     'terminal_max_clearance'):
+            raise ValueError('unsupported reservation_mode')
         self.reservation_mode = reservation_mode
         self.candidate_chunk = int(candidate_chunk)
 
@@ -148,7 +149,9 @@ class SwarmCoordinator(object):
             if not reservations:
                 selected_rank = 0
                 safe_counts[offset] = len(ranked) if self.reservation_mode == 'full_debug' else -1
-            elif self.reservation_mode == 'full_debug':
+            elif (self.reservation_mode in ('full_debug', 'max_clearance') or
+                  (self.reservation_mode == 'terminal_max_clearance' and
+                   plan.mode == 'TERMINAL')):
                 filter_start = time.perf_counter()
                 check = self.collision_checker.check_reservations(
                     candidate_positions, times, reservations)
@@ -156,7 +159,23 @@ class SwarmCoordinator(object):
                 pair_checks += check.pair_checks
                 safe_counts[offset] = int(np.count_nonzero(check.safe_mask))
                 available = np.flatnonzero(check.safe_mask)
-                selected_rank = None if not len(available) else int(available[0])
+                if not len(available):
+                    selected_rank = None
+                elif self.reservation_mode in ('max_clearance',
+                                                'terminal_max_clearance'):
+                    preferred = available[
+                        check.min_pair_distance[available] >=
+                        config.TERMINAL_PREFERRED_UAV_CLEARANCE]
+                    if len(preferred):
+                        # Candidates retain the planner's formal cost order.
+                        selected_rank = int(preferred[0])
+                    else:
+                        # No candidate reaches the soft target: maximize the
+                        # remaining margin while respecting the hard limit.
+                        selected_rank = int(available[np.argmax(
+                            check.min_pair_distance[available])])
+                else:
+                    selected_rank = int(available[0])
             else:
                 stacked = np.asarray([item.positions for item in reservations])
                 threshold = (self.collision_checker.safe_distance +
